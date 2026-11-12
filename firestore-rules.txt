@@ -1,0 +1,122 @@
+rules_version = '2';
+// =====================================================================
+// Wardrobe - shared order platform (customers <-> laundry / ironing shops)
+// Paste this whole file into Firebase console > Firestore > Rules > Publish.
+//
+// What is shared here: ONLY order text (item names / categories / counts),
+// shop profiles, customer-shop links and notifications.
+// Wardrobes, photos and prices never leave each customer's own Google Drive.
+// =====================================================================
+service cloud.firestore {
+match /databases/{database}/documents {
+
+function signedIn() { return request.auth != null; }
+function me() { return request.auth.uid; }
+function shopDoc(shopId) { return get(/databases/$(database)/documents/shops/$(shopId)); }
+function ownsShop(shopId) { return signedIn() && exists(/databases/$(database)/documents/shops/$(shopId)) && shopDoc(shopId).data.ownerUid == me(); }
+function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+
+// ---------- user profile (private to the user) ----------
+match /users/{uid} {
+allow read, create, update: if signedIn() && uid == me();
+allow delete: if false;
+}
+
+// ---------- shops (public business profile; one owner) ----------
+match /shops/{shopId} {
+allow read: if signedIn();
+allow create: if signedIn() && request.resource.data.ownerUid == me()
+&& request.resource.data.name is string && request.resource.data.name.size() > 0
+&& request.resource.data.code is string;
+allow update: if signedIn() && resource.data.ownerUid == me()
+&& request.resource.data.ownerUid == me()
+&& !changed().hasAny(['code', 'createdAt']);
+allow delete: if false;
+}
+
+// ---------- unique shop invitation codes (create-once) ----------
+match /shopCodes/{code} {
+allow read: if signedIn();
+allow create: if signedIn() && request.resource.data.ownerUid == me()
+&& ownsShopAfter(request.resource.data.shopId);
+allow update, delete: if false;
+function ownsShopAfter(shopId) { return getAfter(/databases/$(database)/documents/shops/$(shopId)).data.ownerUid == me(); }
+}
+
+// ---------- per-shop order number counter (+1 only) ----------
+match /counters/{shopId} {
+allow read: if signedIn();
+allow create: if signedIn() && request.resource.data.n == 1 && request.resource.data.keys().hasOnly(['n']);
+allow update: if signedIn() && request.resource.data.n == resource.data.n + 1 && request.resource.data.keys().hasOnly(['n']);
+allow delete: if false;
+}
+
+// ---------- customer <-> shop connections ----------
+// id = <customerUid>_<shopId>; created by the customer; the shop may only edit its own remarks.
+match /links/{linkId} {
+allow read: if signedIn() && (resource.data.customerUid == me() || ownsShop(resource.data.shopId));
+allow create: if signedIn() && request.resource.data.customerUid == me()
+&& linkId == me() + '_' + request.resource.data.shopId
+&& exists(/databases/$(database)/documents/shops/$(request.resource.data.shopId));
+allow update: if signedIn() && (
+(resource.data.customerUid == me() && request.resource.data.customerUid == me()
+&& request.resource.data.shopId == resource.data.shopId && !changed().hasAny(['shopRemarks']))
+|| (ownsShop(resource.data.shopId) && changed().hasOnly(['shopRemarks', 'shopUpdatedAt'])));
+allow delete: if false;
+}
+
+// ---------- orders: the single shared record both sides work on ----------
+match /orders/{orderId} {
+function isCustomer() { return resource.data.customerUid == me(); }
+function isShop() { return ownsShop(resource.data.shopId); }
+// fields fixed at creation: the customer's original order can never be changed by anyone
+function coreUnchanged() {
+return !changed().hasAny(['orderNo', 'shopId', 'shopOwnerUid', 'shopName', 'customerUid', 'customerName',
+'customerCode', 'customerMobile', 'service', 'items', 'totalDeclared',
+'instructions', 'createdAt', 'customerTxnId', 'expectedBy']);
+}
+allow read: if signedIn() && (isCustomer() || isShop());
+allow create: if signedIn()
+&& request.resource.data.customerUid == me()
+&& request.resource.data.status == 'awaiting'
+&& request.resource.data.items is list && request.resource.data.items.size() > 0
+&& request.resource.data.totalDeclared == request.resource.data.items.size()
+&& exists(/databases/$(database)/documents/links/$(me() + '_' + request.resource.data.shopId))
+&& request.resource.data.shopOwnerUid == shopDoc(request.resource.data.shopId).data.ownerUid
+&& request.resource.data.rev == 1;
+allow update: if signedIn() && coreUnchanged() && request.resource.data.rev == resource.data.rev + 1 && (
+// the shop owner manages processing, receipt, completion, handover, delivery, payments
+(isShop() && !changed().hasAny(['discrepancyAck', 'customerAck']))
+// the customer may only: cancel before receipt, report an issue, acknowledge discrepancies / handovers, close when all accounted
+|| (isCustomer() && changed().hasOnly(['status', 'cancel', 'dispute', 'discrepancyAck', 'customerAck', 'closedAt', 'rev', 'updatedAt', 'lastBy'])
+&& (request.resource.data.status == resource.data.status
+|| (request.resource.data.status == 'cancelled' && resource.data.status == 'awaiting')
+|| (request.resource.data.status in ['disputed', 'closed'] && !(resource.data.status in ['awaiting', 'cancelled', 'closed']))))
+);
+allow delete: if false;
+
+// append-only audit trail: every action, who did it, when (server time)
+match /events/{eventId} {
+function order() { return get(/databases/$(database)/documents/orders/$(orderId)).data; }
+function party() { return order().customerUid == me() || ownsShop(order().shopId); }
+allow read: if signedIn() && party();
+allow create: if signedIn() && request.resource.data.by == me() && request.resource.data.serverAt == request.time
+&& (party() || getAfter(/databases/$(database)/documents/orders/$(orderId)).data.customerUid == me());
+allow update, delete: if false;
+}
+}
+
+// ---------- notifications (stored, so nothing is lost while offline) ----------
+match /notifications/{nid} {
+allow read: if signedIn() && resource.data.toUid == me();
+allow create: if signedIn() && request.resource.data.fromUid == me() && request.resource.data.read == false
+&& notifyAllowed(request.resource.data.orderId, request.resource.data.toUid);
+allow update: if signedIn() && resource.data.toUid == me() && changed().hasOnly(['read', 'readAt']);
+allow delete: if signedIn() && resource.data.toUid == me();
+function notifyAllowed(orderId, toUid) {
+let o = getAfter(/databases/$(database)/documents/orders/$(orderId)).data;
+return (o.customerUid == me() && toUid == o.shopOwnerUid) || (o.shopOwnerUid == me() && toUid == o.customerUid);
+}
+}
+}
+}
