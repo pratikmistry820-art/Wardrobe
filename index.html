@@ -441,6 +441,21 @@ body.shopmode .top{background:rgba(243,245,248,.92)}
 .ntf .ndot{width:8px;height:8px;border-radius:50%;flex:none;margin-top:6px;background:transparent}
 .ntf.unread .ndot{background:#1F6FEB}
 .kvs .kv b{font-variant-numeric:tabular-nums}
+
+/* ---- phone fit: nothing may push the page wider than the screen ---- */
+html,body{overflow-x:hidden}
+@supports (overflow-x:clip){html,body{overflow-x:clip}}
+.top{min-width:0}
+.top>*{min-width:0}
+.top .mbrand{flex:0 1 auto;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.top .mbrand>span:not(.mark){overflow:hidden;text-overflow:ellipsis;min-width:0}
+.top .mbrand .mark{flex:none}
+.top .mpill{flex:0 1 auto;min-width:0}
+.mpill .t{min-width:0}
+@media (max-width:480px){.top:has(.mpill) .mbrand{font-size:0;gap:0}}
+.grid>*,.row>*,.kv>*,.li>*{min-width:0}
+.kv b,.li .nm,.card{overflow-wrap:anywhere}
+img,video,canvas,svg{max-width:100%}
 </style>
 </head>
 <body>
@@ -1354,7 +1369,7 @@ function shopReport(key){const rng=rangeOf(SRP.range);const all=SO();const inR=a
     const mo=months.map(m=>all.filter(o=>monthKey(o.createdAt)===m).length);
     h+=`<div class="rgrid">${rcard('Orders per day',byDay?lineChart(days.map(dayLbl),[{name:'Orders',values:perDay,color:SERIES}]):'<p class="small muted">Choose a range of 2 months or less to see daily detail.</p>')}${rcard('Orders per week',colChart(Object.entries(wk).slice(-16).map(([k,v])=>({label:dayLbl(k),full:'Week of '+fmtDate(k),value:v})),rpFmt.n))}
       ${rcard('Orders per month (all time)',colChart(months.slice(-12).map((m,i)=>({label:monthLbl(m),value:mo[months.length-Math.min(12,months.length)+i]})),rpFmt.n))}
-      ${rcard('Month-on-month growth',`<table class="rtab"><thead><tr><th>Month</th><th>Orders</th><th>Growth</th></tr></thead><tbody>${months.slice(-12).map(m=>{const i=months.indexOf(m);const p=i?mo[i-1]:null;return `<tr><td>${monthLbl(m)}</td><td>${mo[i]}</td><td>${p?((mo[i]-p)/p*100).toFixed(0)+'%':'—'}</td></tr>`}).join('')}</tbody></table>`)}</div>`;
+      ${rcard('Month-on-month growth',`<div style="overflow-x:auto"><table class="rtab"><thead><tr><th>Month</th><th>Orders</th><th>Growth</th></tr></thead><tbody>${months.slice(-12).map(m=>{const i=months.indexOf(m);const p=i?mo[i-1]:null;return `<tr><td>${monthLbl(m)}</td><td>${mo[i]}</td><td>${p?((mo[i]-p)/p*100).toFixed(0)+'%':'—'}</td></tr>`}).join('')}</tbody></table></div>`)}</div>`;
     tables.push(T('Order summary',['Measure','Value'],[['Orders received',inR.length],['Completed',done.length],['Pending',pend.length],['Cancelled',canc.length],['Avg completion (hours)',act==null?'':act.toFixed(1)]]),T('Orders per day',['Date','Orders'],days.map((d,i)=>[d,perDay[i]])),T('Orders per month',['Month','Orders','Growth %'],months.map((m,i)=>[m,mo[i],i&&mo[i-1]?((mo[i]-mo[i-1])/mo[i-1]*100).toFixed(1):''])))}
   if(key==='clothes'){const rec=all.reduce((n,o)=>n+Object.values(o.st||{}).filter(s=>s.rcv&&inRange(s.rcvAt,rng)).length,0),proc=all.reduce((n,o)=>n+Object.values(o.st||{}).filter(s=>s.done&&inRange(s.doneAt,rng)).length,0),
       dl=all.reduce((n,o)=>n+(o.handovers||[]).filter(x=>inRange(x.at,rng)).reduce((a,x)=>a+x.count,0),0),pending=all.filter(o=>!['closed','cancelled'].includes(o.status)).reduce((n,o)=>{const c=itemStateCounts(o);return n+c.rcv-c.ret},0);
