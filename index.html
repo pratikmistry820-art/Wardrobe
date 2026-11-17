@@ -453,9 +453,28 @@ html,body{overflow-x:hidden}
 .top .mpill{flex:0 1 auto;min-width:0}
 .mpill .t{min-width:0}
 @media (max-width:480px){.top:has(.mpill) .mbrand{font-size:0;gap:0}}
-.grid>*,.row>*,.kv>*,.li>*{min-width:0}
-.kv b,.li .nm,.card{overflow-wrap:anywhere}
+.grid>*{min-width:0}
+.li .grow{min-width:0}
+.kv b{overflow-wrap:break-word;min-width:0}
+/* order timeline: date on its own line, text gets the full width */
+.tl{list-style:none;margin:0;padding:0}
+.tl li{padding:10px 0;border-bottom:1px solid var(--line)}
+.tl li:last-child{border-bottom:0}
+.tl .h{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.tl .d{color:var(--ink-3);font-weight:600;font-size:12.5px}
+.tl .a{font-weight:700;margin-top:3px}
 img,video,canvas,svg{max-width:100%}
+
+/* live QR scanner */
+.layer .scanbox{position:fixed;inset:0;background:#000;color:#fff;display:flex;flex-direction:column;z-index:5}
+.scanhd{display:flex;align-items:center;justify-content:space-between;padding:calc(12px + var(--safe-t,0px)) 14px 12px}
+.scanhd .iconbtn{color:#fff}
+.scanv{position:relative;flex:1;overflow:hidden;display:grid;place-items:center}
+.scanv video{width:100%;height:100%;object-fit:cover}
+.scanframe{position:absolute;width:min(68vw,300px);aspect-ratio:1;border:3px solid rgba(255,255,255,.9);border-radius:20px;box-shadow:0 0 0 100vmax rgba(0,0,0,.45)}
+.scanmsg{text-align:center;margin:12px 18px;font-size:14px;color:#ddd}
+.scanft{display:flex;justify-content:center;padding:0 14px calc(18px + var(--safe-b,0px))}
+.scanft .btn{background:#fff;color:#111}
 </style>
 </head>
 <body>
@@ -860,6 +879,8 @@ const STATUS={
   alteration:{label:'Given for alteration',short:'Alteration',color:'#7A5A8C',service:true},
   repair:{label:'Under repair',short:'Repair',color:'#8C5A3F',service:true},
   awaiting:{label:'Awaiting shop receipt',short:'Awaiting shop',color:'#9A7440',service:true},
+  ready:{label:'Ready at shop — collect',short:'Ready to collect',color:'#0E8A5F',service:true},
+  handed:{label:'Handed over — confirm receipt',short:'Confirm receipt',color:'#1F6FEB',service:true},
   given:{label:'Given to someone',short:'Given',color:'#8A6F3F'},
   transit:{label:'In transit',short:'In transit',color:'#6A6A6A'},
   elsewhere:{label:'Temporarily stored elsewhere',short:'Elsewhere',color:'#5F6B7A'},
@@ -999,8 +1020,8 @@ function openLinkShop(opts={}){if(!needFB())return;let kind=opts.code?'code':'na
    <div id="lk-res" style="margin-top:14px"></div>`});const n=r.node;
   const ph={name:'e.g. Raju Ironing',mobile:'Shop’s registered mobile number',code:'6-letter shop code, e.g. K7Q2MX'};
   const setKind=k=>{kind=k;$$('#lk-k .chip',n).forEach(c=>c.classList.toggle('on',c.dataset.k===k));$('#lk-q',n).placeholder=ph[k]||'';$('#lk-q',n).inputMode=k==='mobile'?'tel':'text';if(k==='scan')scanShop()};
-  const scanShop=()=>pickFiles(true,false,async f=>{const t=await decodeQRText(f[0]);const m=t&&t.match(/#shop-([A-Z0-9]+)/i);const code=m?m[1]:(t&&/^[A-Z0-9]{6}$/i.test(t.trim())?t.trim():null);
-    if(!code){$('#lk-res',n).innerHTML=`<p class="err">No shop QR code found in that photo. Try again closer to the code.</p>`;return}kind='code';$('#lk-q',n).value=code.toUpperCase();setKind('code');run()});
+  const scanShop=async()=>{const t=await liveScan('Scan the shop’s QR code');if(t==null){setKind('code');return}const code=shopCodeFrom(t);
+    if(!code){setKind('code');$('#lk-res',n).innerHTML=`<p class="err">That QR code isn't a shop code from this app. Ask the shop for its QR poster, or type its 6-letter code.</p>`;return}kind='code';$('#lk-q',n).value=code;setKind('code');run()};
   const run=async()=>{const box=$('#lk-res',n);box.innerHTML='<p class="muted">Searching…</p>';
     try{const list=await findShops(kind,$('#lk-q',n).value);box.innerHTML=list.length?list.slice(0,20).map(sh=>shopCard(sh,R.links[R.uid+'_'+sh.id]?`<span class="pill" style="--c:#4E7A5A">Connected</span>`:`<button class="btn sm primary" data-sh="${sh.id}">Connect</button>`)).join(''):`<p class="muted">No registered shop found. Ask your shop for its code or QR, or check the spelling.</p>`;
       box._list=list}catch(e){box.innerHTML=`<p class="err">${esc(fbErr(e))}</p>`}};
@@ -1055,11 +1076,11 @@ function scheduleApply(){clearTimeout(applyT);applyT=setTimeout(applyRemoteOrder
 async function applyRemoteOrders(){if(applying){scheduleApply();return}if(!S.loaded.items||!S.loaded.transactions)return scheduleApply();applying=true;
   try{for(const o of Object.values(R.orders)){const t=Object.values(S.transactions).find(x=>x.remoteId===o.id)||S.transactions[o.customerTxnId];if(!t)continue;
       const ost=o.st||{};const ack=(o.discrepancyAck&&o.discrepancyAck.refs)||[];const resolved=o.discrepancyResolved||[];const now=nowISO();const local=SHOP_SVC[o.service]?.local||t.type;
-      const coll={},backHome=[];
+      const coll={},backHome=[];const confirmed=confirmedRefs(o);
       for(const it of o.items||[]){const item=S.items[it.ref];if(!item)continue;const x=ost[it.ref]||{};
-        const home=o.status==='cancelled'||x.ret||(x.rcv===false&&(ack.includes(it.ref)||resolved.includes(it.ref)));
+        const home=o.status==='cancelled'||(x.ret&&confirmed.has(it.ref))||(x.rcv===false&&(ack.includes(it.ref)||resolved.includes(it.ref)));
         if(home){if(!(t.collected||{})[it.ref]){coll[it.ref]=x.retAt||now;if(item.currentTxnId===t.id)backHome.push(it.ref)}continue}
-        const want=(o.status==='awaiting'||x.rcv!==true)?'awaiting':local;
+        const want=(o.status==='awaiting'||x.rcv!==true)?'awaiting':x.ret?'handed':x.done?'ready':local;
         if(item.currentTxnId===t.id&&st(item)!==want)await upd('items',it.ref,{status:want,updatedAt:now})}
       const allColl=(o.items||[]).every(it=>(t.collected||{})[it.ref]||coll[it.ref]||!S.items[it.ref]);
       const tp={};if(t.remoteStatus!==o.status)tp.remoteStatus=o.status;if(Object.keys(coll).length)tp.collected=coll;
@@ -1072,6 +1093,63 @@ async function applyRemoteOrders(){if(applying){scheduleApply();return}if(!S.loa
         await logMove({kind:o.status==='cancelled'?'cancelled':'collected',itemIds:backHome,txnId:t.id,activity:o.status==='cancelled'?`Order ${o.orderNo} cancelled — back home`:`Returned by ${o.shopName} (order ${o.orderNo})`,location:'Original storage locations',status:'home'});refreshHistSoon(backHome)}}}
   catch(e){console.warn('apply',e)}finally{applying=false}}
 
+
+
+/* ---- live camera QR scanner (falls back to a photo) ---- */
+function shopCodeFrom(t){t=String(t||'').trim();const m=t.match(/#shop-([A-Z0-9]{6})\b/i);if(m)return m[1].toUpperCase();return /^[A-Z0-9]{6}$/i.test(t)?t.toUpperCase():null}
+function liveScan(title){return new Promise(resolve=>{let stream=null,done=false,timer=null,det=null;
+  const n=document.createElement('div');n.className='scanbox';
+  n.innerHTML=`<div class="scanhd"><b>${esc(title)}</b><button class="iconbtn" data-s="x" aria-label="Close">${ic('x')}</button></div>
+    <div class="scanv"><video playsinline muted autoplay></video><div class="scanframe"></div></div>
+    <p class="scanmsg">Starting camera…</p><div class="scanft"><button class="btn" data-s="photo">${ic('image')} Use a photo instead</button></div>`;
+  const rec=openLayer(n,{dismiss:false,onClose:()=>finish(null,true)});const v=$('video',n),msg=$('.scanmsg',n);
+  function finish(val,fromClose){if(done)return;done=true;clearTimeout(timer);if(stream)stream.getTracks().forEach(t=>t.stop());if(!fromClose)rec.close();resolve(val)}
+  n.onclick=e=>{const b=e.target.closest('[data-s]');if(!b)return;if(b.dataset.s==='x')finish(null);
+    else pickFiles(false,false,async f=>{msg.textContent='Reading photo…';const t=await decodeQRText(f[0]);if(t)finish(t);else msg.textContent='No QR code found in that photo — try again, or point the camera at the code.'})};
+  const cv=document.createElement('canvas');const cx=cv.getContext('2d',{willReadFrequently:true});
+  const tick=async()=>{if(done)return;try{if(v.readyState>=2&&v.videoWidth){let t=null;
+      if(det){const r=await det.detect(v);t=r&&r[0]&&r[0].rawValue}
+      else if(window.jsQR){const sc=Math.min(1,720/Math.max(v.videoWidth,v.videoHeight));cv.width=Math.round(v.videoWidth*sc);cv.height=Math.round(v.videoHeight*sc);cx.drawImage(v,0,0,cv.width,cv.height);const d=cx.getImageData(0,0,cv.width,cv.height);const r=window.jsQR(d.data,cv.width,cv.height,{inversionAttempts:'attemptBoth'});t=r&&r.data}
+      if(t){if(navigator.vibrate)navigator.vibrate(60);finish(t);return}}}catch(e){}timer=setTimeout(tick,200)};
+  (async()=>{try{if('BarcodeDetector' in window){const f=await BarcodeDetector.getSupportedFormats();if(f.includes('qr_code'))det=new BarcodeDetector({formats:['qr_code']})}}catch(e){}
+    if(!det)try{await loadLib('jsqr')}catch(e){}
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){msg.textContent='This browser can’t open the camera here. Use a photo instead.';return}
+    try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});if(done){stream.getTracks().forEach(t=>t.stop());return}
+      v.srcObject=stream;await v.play().catch(()=>{});msg.textContent='Point the camera at the QR code — it scans automatically.';tick()}
+    catch(e){msg.textContent=/denied|NotAllowed/i.test(e.name+e.message)?'Camera permission was blocked. Allow camera access for this site in your browser settings, or use a photo instead.':'Couldn’t start the camera. Use a photo instead.'}})()})}
+
+/* ---- home screen: your shops ---- */
+function dashShopsHtml(){if(!fbOn())return '';const u=fbUser();
+  const links=Object.values(R.links||{}).filter(l=>l.active!==false);
+  const btns=`<div class="row wrap" style="gap:8px;margin-top:12px"><button class="btn sm primary" data-act="shopScan">${ic('scan')} Scan shop QR</button><button class="btn sm" data-act="lnkOpen">${ic('search')} Find by name, mobile or code</button></div>`;
+  if(!u)return '';
+  if(!links.length)return `<div class="section"><div class="card pad" style="border-left:4px solid #1F6FEB"><b>Connect your ironing / laundry shop</b><p class="small muted" style="margin:4px 0 0">Send clothes digitally and get updates when they're received and ready. The shop never sees your wardrobe or photos.</p>${btns}</div></div>`;
+  return `<div class="section"><div class="hd"><h2>Your shops</h2><button class="btn sm" data-act="lnkOpen">${ic('plus')} Connect a shop</button></div><div class="chips" style="margin-top:0">${links.map(l=>`<span class="chip">${ic('store')}${esc(l.shopName||'Shop')}</span>`).join('')}<button class="chip" data-act="shopScan">${ic('scan')} Scan QR</button></div></div>`}
+async function scanShopQuick(){if(!needFB())return;const t=await liveScan('Scan the shop’s QR code');if(t==null)return;const code=shopCodeFrom(t);
+  if(!code)return toast('That QR code isn’t a shop code from this app.','err');if(R.myShop&&R.myShop.code===code)return toast('That is your own shop code.');openLinkShop({code})}
+
+/* ---- pending collection: what the shop finished or handed over ---- */
+function confirmedRefs(o){const ca=o.customerAck||{};const set=new Set();for(const h of o.handovers||[])if(ca[h.id])(h.refs||[]).forEach(r=>set.add(r));return set}
+const collectItems=()=>activeItems().filter(i=>['ready','handed'].includes(st(i))&&inScope(i));
+const collectCount=()=>collectItems().length;
+async function confirmReceipt(orderId){if(!needFB())return false;const o=R.orders[orderId];if(!o)return false;
+  try{await orderAct(orderId,'customer',x=>{const ca={...(x.customerAck||{})};const open=(x.handovers||[]).filter(h=>!ca[h.id]);if(!open.length)throw new Error('Nothing waiting for your confirmation on this order.');
+      const n=open.reduce((a,h)=>a+(h.refs||[]).length,0);for(const h of open)ca[h.id]=nowISO();
+      return {patch:{customerAck:ca},action:'customer_confirmed',data:{count:n},notify:{type:'response',title:`${x.orderNo}: customer confirmed receipt`,body:`${x.customerName} confirmed receiving ${plural(n,'item')}.`}}});
+    toast('Thanks — those clothes are now back at home');return true}catch(e){toast(fbErr(e),'err');return false}}
+function collectView(){const items=collectItems();
+  if(!items.length)return `<div class="section"><div class="empty"><h3>Nothing to collect yet</h3><p>Clothes appear here once the shop marks them finished or hands them over to you. Until then they're counted under <b>At ironing</b> / <b>At dry cleaning</b>.</p></div></div>`;
+  const groups={};for(const it of items){const t=S.transactions[it.currentTxnId]||{};const k=t.remoteId||t.id||'x';(groups[k]=groups[k]||{t,o:R.orders[t.remoteId],handed:[],ready:[]})[st(it)].push(it)}
+  const row=it=>`<div class="card li"><div class="th" data-act="item" data-id="${it.id}">${itemImg(it)}</div><div class="grow" data-act="item" data-id="${it.id}"><div class="nm">${esc(it.name)}</div><div class="sb">${esc(it.code||'')}</div></div></div>`;
+  const card=g=>{const o=g.o||{};const t=g.t;const shop=o.shopName||t.providerName||'Shop';const no=o.orderNo||t.orderNo||'';const last=(o.handovers||[]).filter(h=>!(o.customerAck||{})[h.id]).slice(-1)[0];
+    return `<div class="card pad section" style="border-left:4px solid ${g.handed.length?'#1F6FEB':'#0E8A5F'}"><div class="row between wrap" style="gap:6px"><div><b>${esc(shop)}</b><div class="small muted">${esc(no)}${t.type?' · '+esc((SERVICES[t.type]||{}).label||t.type):''}</div></div>${t.remoteId?`<button class="btn xs" data-act="coOpen" data-id="${t.remoteId}">Order details</button>`:''}</div>
+     ${g.handed.length?`<div class="outbox" style="--c:#1F6FEB;margin-top:12px"><b>Handed over to you${last?' on '+esc(fmtDT(last.at)):''}</b> — ${plural(g.handed.length,'item')}. Please check and confirm you received them.${last&&last.remarks?`<br>Shop's note: “${esc(last.remarks)}”`:''}</div>
+       <div class="list" style="margin-top:10px">${g.handed.map(row).join('')}</div>
+       <div class="row wrap" style="margin-top:12px;gap:8px"><button class="btn primary" data-act="coConfirm" data-id="${t.remoteId}">${ic('check')} Confirm I received ${g.handed.length>1?'these '+g.handed.length:'it'}</button><button class="btn sm" data-act="coOpen" data-id="${t.remoteId}">Something's wrong</button></div>`:''}
+     ${g.ready.length?`<div style="margin-top:${g.handed.length?16:12}px"><span class="pill" style="--c:#0E8A5F">Ready for collection · ${g.ready.length}</span></div><div class="list" style="margin-top:10px">${g.ready.map(row).join('')}</div><p class="hint" style="margin-bottom:0">Collect these from the shop. Once the shop records the handover they'll ask you to confirm here.</p>`:''}</div>`};
+  const gs=Object.values(groups).sort((a,b)=>b.handed.length-a.handed.length);
+  return `<div class="ostats"><div class="card ostat"><div class="num">${items.filter(i=>st(i)==='handed').length}</div><div class="lbl">Handed over — to confirm</div></div><div class="card ostat"><div class="num">${items.filter(i=>st(i)==='ready').length}</div><div class="lbl">Ready at the shop</div></div></div>${gs.map(card).join('')}`}
+
 /* ---- customer order view & actions ---- */
 function remoteOrderFor(t){return t&&t.remoteId?R.orders[t.remoteId]:null}
 function openCustomerOrder(orderId){const o=R.orders[orderId];if(!o)return toast('Order details are still loading — try again in a moment.','err');
@@ -1081,7 +1159,7 @@ function customerOrderBody(o){const st=o.st||{};const c=itemStateCounts(o);const
   const pendingAck=(o.handovers||[]).filter(h=>!(o.customerAck||{})[h.id]);
   return `<div class="row wrap" style="gap:8px">${ostPill(o.status)}<span class="small muted">${esc(o.shopName)} · ${esc(SHOP_SVC[o.service]?.label||o.service)} · sent ${fmtDT(o.createdAt)}</span></div>
    ${notRcv.length?`<div class="outbox" style="--c:#B4472F"><b>The shop received ${c.rcv} of ${c.total}.</b> Not received: ${notRcv.map(i=>esc(i.name)).join(', ')}.${o.receipt&&o.receipt.remarks?`<br>Shop's note: “${esc(o.receipt.remarks)}”`:''}<div class="row wrap" style="margin-top:10px"><button class="btn sm primary" data-co="ackdisc">They're at home — I didn't send them</button><button class="btn sm" data-co="dispute">I did send them — report</button></div></div>`:''}
-   ${pendingAck.length?`<div class="outbox" style="--c:#4E7A5A">${plural(pendingAck.reduce((n,h)=>n+(h.count||0),0),'item')} handed over / delivered by the shop.<div class="row" style="margin-top:8px"><button class="btn sm primary" data-co="confirm">${ic('check')} Confirm I received them</button><button class="btn sm" data-co="dispute">Something's wrong</button></div></div>`:''}
+   ${pendingAck.length?`<div class="outbox" style="--c:#4E7A5A">${plural(pendingAck.reduce((n,h)=>n+(h.count||0),0),'item')} handed over / delivered by the shop.<div class="row wrap" style="margin-top:8px;gap:8px"><button class="btn sm primary" data-co="confirm">${ic('check')} Confirm I received them</button><button class="btn sm" data-co="dispute">Something's wrong</button></div></div>`:''}
    ${o.dispute&&!o.dispute.resolvedAt?`<div class="outbox" style="--c:#B4472F"><b>Issue reported</b> by ${o.dispute.role==='shop'?'the shop':'you'}: ${esc(o.dispute.text)}</div>`:''}
    <div class="section"><h3 style="margin-bottom:8px">Clothes (${o.totalDeclared})</h3><div class="picks">${(o.items||[]).map(it=>{const x=st[it.ref]||{};const item=S.items[it.ref];
      const lab=x.ret?'Returned':x.outd?'Out for delivery':x.done?'Ready':x.rcv===true?'At shop':x.rcv===false?'Not received':o.status==='cancelled'?'Cancelled':'Awaiting receipt';
@@ -1090,7 +1168,7 @@ function customerOrderBody(o){const st=o.st||{};const c=itemStateCounts(o);const
    <div class="section"><h3 style="margin-bottom:8px">Timeline</h3><div class="card evlist" style="padding:4px 12px"><p class="muted small">Loading…</p></div></div>
    <div class="dacts" style="margin-top:16px">${o.status==='awaiting'?`<button class="btn sm" style="color:var(--danger)" data-co="cancel">${ic('x')} Cancel order</button>`:''}${!['awaiting','cancelled','closed','disputed'].includes(o.status)?`<button class="btn sm" data-co="dispute">${ic('alert')} Report an issue</button>`:''}${o.status!=='closed'&&o.status!=='cancelled'&&o.status!=='awaiting'&&accounted(o)?`<button class="btn sm primary" data-co="close">Close order</button>`:''}</div>`}
 async function loadEvents(orderId,el){if(!el)return;try{const ev=(await FB.query(`orders/${orderId}/events`,[])).sort((a,b)=>a.rev-b.rev);
-  el.innerHTML=ev.length?`<table class="hist"><tbody>${ev.map(e=>`<tr><td class="d">${fmtDT(e.at)}</td><td><div class="a">${esc(EVLABEL[e.action]||e.action)}</div><div class="small muted">${esc(e.role==='shop'?'Shop':'Customer')}${e.byName?' · '+esc(e.byName):''}${e.note?' — '+esc(e.note):''}</div></td><td>${ostPill(e.status)}</td></tr>`).join('')}</tbody></table>`:'<p class="muted small">No activity yet.</p>'}catch(e){el.innerHTML=`<p class="err small">${esc(fbErr(e))}</p>`}}
+  el.innerHTML=ev.length?`<ul class="tl">${ev.map(e=>`<li><div class="h"><span class="d">${fmtDT(e.at)}</span>${ostPill(e.status)}</div><div class="a">${esc(EVLABEL[e.action]||e.action)}</div><div class="small muted">${esc(e.role==='shop'?'Shop':'Customer')}${e.byName?' · '+esc(e.byName):''}${e.note?' — '+esc(e.note):''}</div></li>`).join('')}</ul>`:'<p class="muted small">No activity yet.</p>'}catch(e){el.innerHTML=`<p class="err small">${esc(fbErr(e))}</p>`}}
 const EVLABEL={created:'Order sent to shop',cancelled:'Order cancelled',received:'Clothes received by shop',received_update:'Receipt updated',processing:'Processing started',items_done:'Items completed',completed:'Order completed — ready',
   handover:'Handed over to customer',dispatched:'Out for delivery',delivered:'Delivered',payment:'Payment recorded',refund:'Refund recorded',charges:'Charges updated',disputed:'Issue reported',dispute_resolved:'Issue resolved',
   discrepancy_ack:'Customer confirmed items were not sent',discrepancy_resolved:'Shop resolved discrepancy',customer_confirmed:'Customer confirmed receipt',closed:'Order closed',remarks:'Remarks added'};
@@ -1101,7 +1179,7 @@ async function customerOrderAction(k,orderId,r){if(!needFB())return;const o=R.or
         const y={...x,...p};if(accounted(y)&&!['awaiting','cancelled','closed'].includes(x.status)){p.status='closed';p.closedAt=nowISO()}return {patch:p,action:'discrepancy_ack',notify:{type:'response',title:`${x.orderNo}: customer confirmed`,body:`${x.customerName} confirmed ${plural(refs.length,'item was','items were')} not sent.`}}})}
     else if(k==='dispute'){const v=await dialog({title:'Report an issue',fields:[{name:'text',label:'What went wrong?',type:'textarea',required:true}],ok:'Send to shop'});if(!v)return;
       res=await orderAct(orderId,'customer',x=>({patch:{status:'disputed',dispute:{at:nowISO(),by:fbUser().uid,role:'customer',text:v.text.slice(0,500),prevStatus:x.status}},action:'disputed',note:v.text,notify:{type:'dispute',title:`Issue on ${x.orderNo}`,body:v.text.slice(0,140)}}))}
-    else if(k==='confirm'){res=await orderAct(orderId,'customer',x=>{const ca={...(x.customerAck||{})};for(const h of x.handovers||[])if(!ca[h.id])ca[h.id]=nowISO();return {patch:{customerAck:ca},action:'customer_confirmed',notify:null}})}
+    else if(k==='confirm'){if(!await confirmReceipt(orderId))return}
     else if(k==='close'){res=await orderAct(orderId,'customer',x=>{if(!accounted(x))throw new Error('Some clothes are still with the shop.');return {patch:{status:'closed',closedAt:nowISO()},action:'closed',notify:{type:'closed',title:`${x.orderNo} closed`,body:'Customer closed the order — all items accounted for.'}}})}
     toast('Done');r.close();setTimeout(()=>openCustomerOrder(orderId),300)}catch(e){toast(fbErr(e),'err')}}
 
@@ -1113,7 +1191,7 @@ function notifSection(role){const list=notifList(role).slice(0,60);if(!list.leng
    ${list.map(n=>`<button class="pvrow ntf ${n.read?'':'unread'}" data-act="ntfOpen" data-id="${n.id}" style="width:100%;text-align:left"><span class="ndot"></span><div class="grow"><b>${esc(n.title)}</b><div class="small muted">${esc(n.body)}</div><div class="small muted">${fmtDT(n.createdAt)}</div></div>${ic('chev')}</button>`).join('')}`}
 async function openNotif(id){const n=R.notifs[id];if(!n)return;if(!n.read)FB.update('notifications/'+id,{read:true,readAt:nowISO()}).catch(()=>{});
   layers.slice().forEach(l=>l.close());
-  if(n.toRole==='shop'){if(mode_()!=='shop')switchMode('shop');setTimeout(()=>openShopOrder(n.orderId),200)}else{if(mode_()==='shop')switchMode('customer');setTimeout(()=>openCustomerOrder(n.orderId),200)}}
+  if(n.toRole==='shop'){if(mode_()!=='shop')switchMode('shop');setTimeout(()=>openShopOrder(n.orderId),200)}else{if(mode_()==='shop')switchMode('customer');if(['handover','completed','partial','out'].includes(n.type)&&collectCount()){setTimeout(()=>goOutside('collect'),150);return}setTimeout(()=>openCustomerOrder(n.orderId),200)}}
 async function markAllRead(role){for(const n of notifList(role).filter(n=>!n.read))await FB.update('notifications/'+n.id,{read:true,readAt:nowISO()}).catch(()=>{});toast('All marked as read')}
 function notifPrefsHtml(){const p=prefs();return `<div class="section"><div class="hd"><h2>Notification preferences</h2></div><div class="card pad"><p class="small muted" style="margin-top:0">Choose which shop / order messages you want to see. Muted messages are still kept in the order's history.</p>
   <div class="fgrid">${Object.entries(NOTIF_TYPES).map(([k,l])=>`<label class="chk"><input type="checkbox" data-act="ntfPref" data-k="${k}" ${p[k]===false?'':'checked'}> ${esc(l)}</label>`).join('')}</div></div></div>`}
@@ -1467,7 +1545,7 @@ async function shopQRPoster(){const sh=R.myShop;try{await loadLib('qr')}catch(e)
 /* ---- hooks into the existing app ---- */
 const SHOP_ACT={
   lnkOpen:()=>openLinkShop(),shopReg:()=>openShopRegister(),modeShop:()=>switchMode('shop'),modeCust:()=>switchMode('customer'),shopMore:()=>shopMoreSheet(),
-  provConnect:t=>openLinkShop({providerId:t.dataset.id}),coOpen:t=>openCustomerOrder(t.dataset.id),
+  provConnect:t=>openLinkShop({providerId:t.dataset.id}),coOpen:t=>openCustomerOrder(t.dataset.id),shopScan:()=>scanShopQuick(),coConfirm:async t=>{t.disabled=true;await confirmReceipt(t.dataset.id);t.disabled=false},
   ntfOpen:t=>openNotif(t.dataset.id),ntfAll:t=>markAllRead(t.dataset.k),ntfPref:t=>{const p=prefs();p[t.dataset.k]=!(p[t.dataset.k]!==false);lsSet('notifPrefs',JSON.stringify(p));render()},
   soTab:t=>{SF.tab=t.dataset.k;render()},soOpen:t=>openShopOrder(t.dataset.id),soDo:t=>shopDo(t.dataset.k,t.dataset.id),scOpen:t=>openShopCustomer(t.dataset.id),
   srTab:t=>{SRP.tab=t.dataset.k;render()},srExp:t=>exportShopReport(t.dataset.k),
@@ -1688,7 +1766,7 @@ function renderMain(){const m=$('#main');if(mode_()==='shop'){if(S.hash==='shops
 function viewDashboard(){
   const act=activeItems();const total=act.length;const home=act.filter(i=>st(i)==='home').length;
   const by=s=>act.filter(i=>st(i)===s).length;
-  const pend=openS().reduce((n,t)=>n+pendS(t).length,0);
+  const pend=collectCount();const handedN=act.filter(i=>st(i)==='handed').length;
   const overT=openS().filter(isOverdue);const overN=overT.reduce((n,t)=>n+pendS(t).length,0);
   const roots=catKids('');
   const find=fn=>roots.filter(c=>fn(norm(c.name)));
@@ -1704,14 +1782,16 @@ function viewDashboard(){
   const cnt=ids=>act.filter(i=>ids.includes(i.categoryId)).length;
   const kinds=['shirt','trouser','tee','trouser','kurta','hanger'];const cols=['Sky Blue','Charcoal','Olive','Denim','Maroon',''];
   const alerts=[];
-  const ir=by('ironing'),dc=by('dryclean'),wa=by('washing'),al=by('alteration')+by('repair');
+  const svcOf=i=>['awaiting','ready','handed'].includes(st(i))?(S.transactions[i.currentTxnId]||{}).type:st(i);const bySvc=k=>act.filter(i=>st(i)!=='ready'&&st(i)!=='handed'&&svcOf(i)===k).length;
+  const ir=bySvc('ironing'),dc=bySvc('dryclean'),wa=bySvc('washing'),al=bySvc('alteration')+bySvc('repair');
   const irShops=new Set(openS().filter(t=>t.type==='ironing').map(t=>t.providerName)).size;
   if(overN)alerts.push(['alert',STATUS.repair.color.replace('8C5A3F','B4472F'),`<b>${plural(overN,'item')}</b> overdue for collection`,`from ${plural(overT.length,'shop')} — expected date has passed`,`outside:all`]);
   if(ir)alerts.push(['iron',STATUS.ironing.color,`<b>${plural(ir,'cloth','clothes')}</b> at the ironing shop`,irShops>1?`across ${irShops} shops`:'',`outside:ironing`]);
   if(dc)alerts.push(['drop',STATUS.dryclean.color,`<b>${plural(dc,'cloth','clothes')}</b> at the dry cleaner`,'',`outside:dryclean`]);
   if(wa)alerts.push(['drop',STATUS.washing.color,`<b>${plural(wa,'cloth','clothes')}</b> at the laundry`,'',`outside:washing`]);
   if(al)alerts.push(['shirt',STATUS.alteration.color,`<b>${plural(al,'item')}</b> with the tailor / repair`,'',`outside:alteration`]);
-  if(pend)alerts.push(['clock','#9A7440',`<b>${plural(pend,'cloth','clothes')}</b> pending collection`,`in ${plural(openS().length,'open transaction')}`,`outside:all`]);
+  if(handedN)alerts.push(['check','#1F6FEB',`<b>${plural(handedN,'cloth','clothes')}</b> handed over — confirm you received them`,'Tap to confirm','outside:collect']);
+  if(pend-handedN)alerts.push(['clock','#0E8A5F',`<b>${plural(pend-handedN,'cloth','clothes')}</b> ready for collection`,'The shop has finished them','outside:collect']);
   const rem=openTxns().filter(t=>t.reminderState!=='done'&&effRem(t)&&new Date(effRem(t))<=addDays(new Date(),2));
   for(const tr of Object.values(S.trips).filter(t=>t.status==='planning'&&t.start&&tripInScope(t))){const days=Math.round((parseD(tr.start)-parseD(todayStr()))/864e5);const left=tripTotal(tr)-tripPacked(tr);if(days>=0&&days<=5&&left>0)alerts.push(['box','#2a78d6',`<b>${esc(tr.name)}</b> ${days===0?'is today':days===1?'is tomorrow':`in ${days} days`}`,`${left} of ${tripTotal(tr)} things still to pack`,'trip:'+tr.id])}
   const cdue=customDue();if(cdue.length)alerts.push(['bell','#6250d6',`<b>${plural(cdue.length,'reminder')}</b> due`,cdue.map(r=>r.title).slice(0,2).join(', '),'bell']);
@@ -1731,8 +1811,9 @@ function viewDashboard(){
     <button class="card stat" data-act="goW" data-f='{"status":"home"}' style="--c:${STATUS.home.color}"><span class="lbl"><i></i>At home</span><span class="num">${home}</span></button>
     <button class="card stat" data-act="goO" data-t="ironing" style="--c:${STATUS.ironing.color}"><span class="lbl"><i></i>At ironing</span><span class="num">${ir}</span></button>
     <button class="card stat" data-act="goO" data-t="dryclean" style="--c:${STATUS.dryclean.color}"><span class="lbl"><i></i>At dry cleaning</span><span class="num">${dc}</span></button>
-    <button class="card stat ${overN?'warn':''}" data-act="goO" data-t="all" style="--c:#9A7440"><span class="lbl"><i></i>Pending collection</span><span class="num">${pend}</span><span class="sub">${overN?`${overN} overdue`:'none overdue'}</span></button>
+    <button class="card stat ${overN?'warn':''}" data-act="goO" data-t="collect" style="--c:#0E8A5F"><span class="lbl"><i></i>Pending collection</span><span class="num">${pend}</span><span class="sub">${handedN?`${handedN} to confirm`:pend?'ready at shop':'nothing ready yet'}</span></button>
   </div>
+  ${dashShopsHtml()}
   <div class="section"><div class="hd"><h2>By category</h2><button class="link" data-act="nav" data-v="categories">All categories</button></div>
     <div class="cats">${groups.map((g,i)=>`<button class="card catcard" data-act="goW" data-f='${esc(JSON.stringify({cat:g[1].map(c=>c.id).join(',')}))}'>${silhouette(kinds[i],cols[i])}<span class="n">${cnt(g[1].map(c=>c.id))}</span><span class="t">${g[0]}</span></button>`).join('')}</div></div>
   <div class="section"><div class="hd"><h2>Alerts</h2></div>
@@ -2221,13 +2302,14 @@ async function deleteItem(id){if(!needDb())return;const it=S.items[id];if(!it)re
 
 /* ---------------- outside ---------------- */
 function viewOutside(){
-  const tabs=[['all','All services'],['ironing','Ironing'],['dryclean','Dry cleaning'],['washing','Washing'],['alteration','Alteration'],['repair','Repair'],['other','Given / elsewhere'],['history','History']];
+  const tabs=[['collect','Pending collection'],['all','All services'],['ironing','Ironing'],['dryclean','Dry cleaning'],['washing','Washing'],['alteration','Alteration'],['repair','Repair'],['other','Given / elsewhere'],['history','History']];
   const tab=S.outTab;const act=activeItems();
-  const cnt=k=>k==='all'?openS().reduce((n,t)=>n+pendS(t).length,0):k==='other'?act.filter(i=>['given','transit','elsewhere'].includes(st(i))).length:k==='history'?'':openS().filter(t=>t.type===k).reduce((n,t)=>n+pendS(t).length,0);
-  let html=`<div style="padding-top:6px">${memberChips()}<h1 style="margin-top:6px">${tab==='ironing'?'Ironing tracker':tab==='dryclean'?'Dry cleaning':tab==='history'?'Transaction history':'Clothes outside home'}</h1>
+  const cnt=k=>k==='collect'?collectCount():k==='all'?openS().reduce((n,t)=>n+pendS(t).length,0):k==='other'?act.filter(i=>['given','transit','elsewhere'].includes(st(i))).length:k==='history'?'':openS().filter(t=>t.type===k).reduce((n,t)=>n+pendS(t).length,0);
+  let html=`<div style="padding-top:6px">${memberChips()}<h1 style="margin-top:6px">${tab==='collect'?'Pending collection':tab==='ironing'?'Ironing tracker':tab==='dryclean'?'Dry cleaning':tab==='history'?'Transaction history':'Clothes outside home'}</h1>
    <div class="tabsx">${tabs.map(([k,l])=>{const c=cnt(k);return `<button class="chip ${tab===k?'on':''}" data-act="otab" data-t="${k}">${l}${c?` <span class="c">${c}</span>`:''}</button>`}).join('')}</div></div>`;
   if(tab==='other'){const list=act.filter(i=>['given','transit','elsewhere'].includes(st(i)));
     return html+`<div class="section">${list.length?`<div class="list">${list.map(it=>`<div class="card li"><div class="th" data-act="item" data-id="${it.id}">${itemImg(it)}</div><div class="grow" data-act="item" data-id="${it.id}"><div class="nm">${esc(it.name)}</div><div class="sb"><span class="pill" style="--c:${STATUS[st(it)].color}">${esc(STATUS[st(it)].label)}</span></div><div class="sb">${esc(it.outsideWith||'')} · since ${fmtShort(it.outsideSince)}</div></div><button class="btn sm" data-act="status" data-id="${it.id}">Back home</button></div>`).join('')}</div>`:`<div class="empty"><h3>Nothing given away</h3><p>Items you lend, carry or store elsewhere show up here. Use “Change status” on any item.</p></div>`}</div>`}
+  if(tab==='collect')return html+collectView();
   if(tab==='history'){const list=Object.values(S.transactions).filter(t=>t.status!=='open'&&txnInScope(t)).sort((a,b)=>String(b.closedAt||b.givenAt).localeCompare(String(a.closedAt||a.givenAt)));
     return html+`<div class="section txns">${list.length?list.slice(0,100).map(t=>txnCard(t,true)).join(''):`<div class="empty"><h3>No completed transactions yet</h3></div>`}</div>`}
   const txns=openS().filter(t=>tab==='all'||t.type===tab).sort((a,b)=>(isOverdue(b)-isOverdue(a))||String(a.expectedAt||'9').localeCompare(String(b.expectedAt||'9')));
@@ -2573,7 +2655,7 @@ const ACT=window.__ACT={
   goW:t=>{let f={};try{f=JSON.parse(t.dataset.f||'{}')}catch(e){}goWardrobe(f)},
   goO:t=>{layers.slice().forEach(l=>l.close());goOutside(t.dataset.t||'all')},
   alert:t=>{const k=t.dataset.k;if(k==='unassigned')goWardrobe({unassigned:true});else if(k==='family')go('family');else if(k.startsWith('trip:'))openTrip(k.slice(5));else if(k==='bell')openBell();else if(k.startsWith('outside:'))goOutside(k.split(':')[1]==='alteration'?'alteration':k.split(':')[1])},
-  quick:t=>{const k=t.dataset.k;({wardrobe:()=>goWardrobe({}),add:()=>openForm(),sendIron:()=>{goWardrobe({status:'home'});S.selectMode=true;render();toast('Tap the clothes you are sending, then “Ironing”.')},categories:()=>go('categories'),locations:()=>go('locations'),ironing:()=>goOutside('ironing'),drycleaning:()=>goOutside('dryclean'),pending:()=>goOutside('all'),history:()=>goOutside('history'),bulk:()=>openBulk(),settings:()=>go('settings'),reports:()=>go('reports'),family:()=>go('family'),outfits:()=>go('outfits'),trips:()=>go('trips'),scan:()=>startScan()}[k]||(()=>{}))()},
+  quick:t=>{const k=t.dataset.k;({wardrobe:()=>goWardrobe({}),add:()=>openForm(),sendIron:()=>{goWardrobe({status:'home'});S.selectMode=true;render();toast('Tap the clothes you are sending, then “Ironing”.')},categories:()=>go('categories'),locations:()=>go('locations'),ironing:()=>goOutside('ironing'),drycleaning:()=>goOutside('dryclean'),pending:()=>goOutside('collect'),history:()=>goOutside('history'),bulk:()=>openBulk(),settings:()=>go('settings'),reports:()=>go('reports'),family:()=>go('family'),outfits:()=>go('outfits'),trips:()=>go('trips'),scan:()=>startScan()}[k]||(()=>{}))()},
   item:t=>{const id=t.dataset.id;const it=S.items[id];if(!it)return;
     if(S.view==='wardrobe'&&S.selectMode&&!t.closest('.layer')){if(isArch(it)){toast(`${it.name} is ${STATUS[st(it)].label.toLowerCase()}.`,'err');return}S.select.has(id)?S.select.delete(id):S.select.add(id);updateWardrobe();renderSelbar();return}
     openItem(id)},
@@ -2764,12 +2846,9 @@ async function labelsPDF(ids){ids=ids.filter(i=>S.items[i]);if(!ids.length)retur
     ids.slice(p*per,p*per+per).forEach((id,i)=>drawLabel(x,S.items[id],mx+(i%cols)*lw,my+Math.floor(i/cols)*lh,lw,lh));
     doc.addImage(c.toDataURL('image/jpeg',.92),'JPEG',0,0,210,297)}
   const blob=doc.output('blob');saveFile(`wardrobe-qr-labels-${todayStr()}.pdf`,blob)}
-function startScan(){loadLib('jsqr').catch(()=>{});pickFiles(true,false,files=>decodeScan(files[0]))}
-async function decodeScan(file){try{await loadLib('jsqr')}catch(e){return toast(e.message,'err')}
-  let code=null;try{const img=await blobImage(file);for(const max of [1400,900,2000]){const s=Math.min(1,max/Math.max(img.naturalWidth,img.naturalHeight));const c=document.createElement('canvas');c.width=Math.round(img.naturalWidth*s);c.height=Math.round(img.naturalHeight*s);
-      const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(img,0,0,c.width,c.height);const d=x.getImageData(0,0,c.width,c.height);const r=window.jsQR(d.data,c.width,c.height,{inversionAttempts:'attemptBoth'});if(r&&r.data){code=r.data;break}}}catch(e){}
-  if(!code)return scanFail('No QR code found in that photo. Hold the phone steady, fill the frame with the label and try again.');
-  const m=code.match(/#i-([A-Za-z0-9-]+)/);let it=m?S.items[m[1]]:null;if(!it){const c=code.trim().toUpperCase();it=Object.values(S.items).find(i=>String(i.code).toUpperCase()===c)}
+async function startScan(){const t=await liveScan('Scan a QR code');if(t==null)return;const sc=shopCodeFrom(t);if(sc&&!/#i-/.test(t)){if(R.myShop&&R.myShop.code===sc)return toast('That is your own shop code.');return openLinkShop({code:sc})}handleItemScan(t)}
+async function decodeScan(file){const t=await decodeQRText(file);if(!t)return scanFail('No QR code found in that photo. Hold the phone steady, fill the frame with the label and try again.');handleItemScan(t)}
+function handleItemScan(code){const m=code.match(/#i-([A-Za-z0-9-]+)/);let it=m?S.items[m[1]]:null;if(!it){const c=code.trim().toUpperCase();it=Object.values(S.items).find(i=>String(i.code).toUpperCase()===c)}
   if(!it)return scanFail('That QR code is not one of your wardrobe labels (or the item was deleted).');
   if(S.member&&!inScope(it))setMember('');openItem(it.id);toast(`${it.code} · ${it.name}`)}
 function scanFail(msg){const n=document.createElement('div');n.className='dialog';n.innerHTML=`<h3>Scan didn't work</h3><p>${esc(msg)}</p><div class="row"><button class="btn ghost" data-s="x">Close</button><button class="btn" data-s="lib">${ic('image')} From gallery</button><button class="btn primary" data-s="cam">${ic('camera')} Try again</button></div>`;
