@@ -418,6 +418,18 @@ details.fs[open] > summary{margin-bottom:12px}
 #pf-welcome .pf-sub{color:var(--ink-2);margin:0 0 12px}
 #pf-welcome .btn{height:52px;font-size:15px}
 #pf-welcome .pf-hint{font-size:12.5px;color:var(--ink-3);margin:-2px 0 8px}
+a.pf-install,.pf-install{display:flex;align-items:center;justify-content:center;text-decoration:none;background:#1F6FEB;color:#fff;border-color:#1F6FEB;margin:4px 0 8px}
+.pf-ibanner{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px}
+.pf-ib{display:flex;align-items:center;gap:12px}
+.pf-ib a.btn{text-decoration:none}
+#pf-ios{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center}
+#pf-ios .pf-sheet{background:var(--surface,#fff);color:var(--ink,#111);width:100%;max-width:480px;border-radius:22px 22px 0 0;padding:22px 20px calc(20px + env(safe-area-inset-bottom))}
+#pf-ios h3{margin:0 0 10px;font-size:20px}
+.pf-steps{margin:8px 0 18px;padding-left:22px;line-height:1.55}
+.pf-steps li{margin:8px 0}
+.pf-steps svg{vertical-align:-5px}
+.pf-plus{display:inline-block;border:1.5px solid currentColor;border-radius:5px;width:18px;height:18px;line-height:15px;text-align:center;font-size:14px}
+.pf-step{background:#FFF6E5;border-radius:12px;padding:10px 12px;font-size:14px}
 #pf-welcome .pf-note{background:var(--danger-soft);color:var(--danger);border-radius:12px;padding:10px 12px;font-weight:600;font-size:13.5px;margin:0}
 .banner .link{font-size:inherit;text-decoration:underline}
 body.shopmode{--bg:#F3F5F8;--surface-2:#E9EEF4;--surface-3:#DDE4EC;--ink:#0F1B2D;--ink-2:#465467;--ink-3:#7A8697;--line:#DFE5EC;--line-2:#CBD4DF;--accent:#1F6FEB;--accent-soft:#E6EFFE}
@@ -687,9 +699,24 @@ const later2=ms=>new Promise(r=>setTimeout(r,ms));
 let installEvt=null;window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEvt=e;rerender()});
 const isIOS=/iphone|ipad|ipod/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 const standalone=()=>window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
-function installHint(){if(standalone())return '';if(installEvt)return `<button class="btn block" data-pf="install">⬇ Install the app on this device</button>`;
-  if(isIOS)return `<p class="pf-hint">To install: tap <b>Share</b> <span aria-hidden="true">⎋</span> in Safari, then <b>Add to Home Screen</b>.</p>`;
-  return `<p class="pf-hint">To install: open your browser menu (⋮) and choose <b>Install app</b> or <b>Add to Home screen</b>.</p>`}
+const UA=navigator.userAgent||'';const isAndroid=/android/i.test(UA);
+const inAppBrowser=/FBAN|FBAV|Instagram|Line\/|WhatsApp|Snapchat|Twitter|LinkedInApp|GSA\/|; wv\)/i.test(UA);
+window.addEventListener('appinstalled',()=>{installEvt=null;LSS('installed','1');try{window.toast&&window.toast('Installed — open Wardrobe from your home screen')}catch(e){}rerender()});
+function chromeIntent(){return `intent://${location.host}${location.pathname}#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(location.origin+location.pathname)};end`}
+function installKind(){if(standalone())return '';if(installEvt)return 'prompt';if(isIOS)return inAppBrowser?'ios-inapp':'ios';if(isAndroid)return inAppBrowser?'android-inapp':'android';return installEvt?'prompt':'desktop'}
+function installHint(){const k=installKind();if(!k)return '';
+  if(k==='prompt')return `<button class="btn block pf-install" data-pf="install">⬇ Install the app — one tap</button>`;
+  if(k==='android-inapp'||k==='android')return `<a class="btn block pf-install" href="${chromeIntent()}">⬇ Open in Chrome to install</a><p class="pf-hint">${k==='android'?'Already installed? Open <b>Wardrobe</b> from your home screen.':'Links opened inside WhatsApp or other apps can’t install — this opens it in Chrome, where an <b>Install</b> button appears.'}</p>`;
+  if(k==='ios'||k==='ios-inapp')return `<button class="btn block pf-install" data-pf="iosguide">⬇ Install on iPhone — 3 quick steps</button>`;
+  return `<p class="pf-hint">To install: click the install icon (⊕) at the right end of the address bar, or open the browser menu and choose <b>Install Wardrobe</b>.</p>`}
+function installBanner(){const k=installKind();if(!k||k==='desktop')return '';const later=+(LS('installNag')||0);if(Date.now()-later<5*864e5)return '';
+  const btn=k==='prompt'?`<button class="btn sm primary" data-pf="install">Install</button>`:k.startsWith('ios')?`<button class="btn sm primary" data-pf="iosguide">How to install</button>`:`<a class="btn sm primary" href="${chromeIntent()}">Open in Chrome</a>`;
+  return `<div class="banner pf-ibanner"><span><b>Get the Wardrobe app</b> on your home screen — opens full screen, works offline.</span><span class="pf-ib">${btn}<button class="link" data-pf="installlater">Later</button></span></div>`}
+function iosGuide(){const inapp=installKind()==='ios-inapp';let g=document.getElementById('pf-ios');if(g)g.remove();g=document.createElement('div');g.id='pf-ios';
+  const share=`<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#0A84FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M5 11v9h14v-9"/></svg>`;
+  g.innerHTML=`<div class="pf-sheet"><h3>Install Wardrobe on iPhone</h3>${inapp?`<p class="pf-step"><b>First open this page in Safari:</b> tap <b>⋯</b> or the compass icon and choose <b>Open in Safari</b>. Or <button class="link" data-pf="copylink">copy the link</button> and paste it in Safari.</p>`:''}
+    <ol class="pf-steps"><li>Tap the <b>Share</b> button ${share} at the bottom of Safari.</li><li>Scroll down and tap <b>Add to Home Screen</b> <span class="pf-plus">＋</span>.</li><li>Tap <b>Add</b> (top right). The Wardrobe icon appears on your home screen.</li></ol>
+    <button class="btn block" data-pf="iosclose">Got it</button></div>`;document.body.appendChild(g)}
 function showWelcome(note){let w=document.getElementById('pf-welcome');if(!w){w=document.createElement('div');w.id='pf-welcome';document.body.appendChild(w)}
   w.innerHTML=`<div class="pf-card"><div class="pf-mark"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 5.5a2 2 0 1 1 2 2v1.5l8.6 6.6a.8.8 0 0 1-.5 1.4H3.9a.8.8 0 0 1-.5-1.4L12 9"/></svg></div>
    <h1>Wardrobe</h1><p class="pf-sub">Photograph every piece of clothing, know where it's kept, and never lose track of what's at the ironing shop or dry cleaner.</p>
@@ -707,14 +734,19 @@ function showMsg(m){if(typeof window.toast==='function')window.toast(m,'err');el
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-pf]');if(!b)return;e.preventDefault();const k=b.dataset.pf;
   if(k==='google')signIn('select_account');
   else if(k==='local'){LSS('mode','local');PS.state='local';hideWelcome();onboard()}
-  else if(k==='install'&&installEvt){installEvt.prompt();installEvt=null;rerender()}
+  else if(k==='install'&&installEvt){const ev=installEvt;installEvt=null;ev.prompt();try{const c=await ev.userChoice;if(c&&c.outcome!=='accepted')installEvt=null}catch(x){}rerender()}
+  else if(k==='installlater'){LSS('installNag',String(Date.now()));rerender()}
+  else if(k==='iosguide')iosGuide();
+  else if(k==='iosclose'){const g=document.getElementById('pf-ios');if(g)g.remove()}
+  else if(k==='copylink'){try{await navigator.clipboard.writeText(location.origin+location.pathname);window.toast&&window.toast('Link copied — paste it in Safari')}catch(x){prompt('Copy this link',location.origin+location.pathname)}}
   else if(k==='reconnect')signIn('none');
   else if(k==='retry')syncNow();
   else if(k==='dismisslocal'){LSS('localNag',String(Date.now()));rerender()}});
 
 /* ---------------- account settings / banner (used by the app) ---------------- */
 const ago=t=>{if(!t)return 'never';const s=(Date.now()-t)/1000;if(s<60)return 'just now';if(s<3600)return Math.round(s/60)+' min ago';if(s<86400)return Math.round(s/3600)+' h ago';return new Date(t).toLocaleDateString()};
-window.platformBanner=()=>{const m=mode();if(!m)return '';
+window.platformBanner=()=>{const ib=installBanner();return ib+platformBanner0()};
+const platformBanner0=()=>{const m=mode();if(!m)return '';
   if(m==='google'){if(PS.state==='auth')return `<div class="banner">Sync paused — Google sign-in expired. <button class="link" data-pf="reconnect">Reconnect Google Drive</button></div>`;
     if(PS.state==='error')return `<div class="banner err">Couldn't sync with Google Drive: ${esc(PS.msg).slice(0,140)} <button class="link" data-pf="retry">Try again</button></div>`;
     if(PS.state==='offline'&&dirty)return `<div class="banner">You're offline — changes are saved on this device and will sync when you're back online.</div>`;return ''}
